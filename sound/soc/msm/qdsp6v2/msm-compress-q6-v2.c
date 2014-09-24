@@ -106,7 +106,7 @@ struct msm_compr_audio {
 
 	uint32_t codec;
 	void    *buffer; /* virtual address */
-	uint32_t buffer_paddr; /* physical address */
+	phys_addr_t buffer_paddr; /* physical address */
 	uint32_t app_pointer;
 	uint32_t buffer_size;
 	uint32_t byte_offset;
@@ -1184,6 +1184,11 @@ static int msm_compr_trigger(struct snd_compr_stream *cstream, int cmd)
 		pr_debug("%s: SNDRV_PCM_TRIGGER_START\n", __func__);
 		atomic_set(&prtd->start, 1);
 		q6asm_run_nowait(prtd->audio_client, 0, 0, 0);
+
+		msm_compr_set_volume(cstream, 0, 0);
+		if (rc)
+			pr_err("%s : Set Volume (0,0) failed : %d\n",
+				__func__, rc);
 
 		msm_compr_set_volume(cstream, volume[0], volume[1]);
 		if (rc)

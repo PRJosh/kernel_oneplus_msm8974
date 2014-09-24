@@ -385,7 +385,6 @@ _armv4_AES_encrypt:
 	sub	r10,r10,#2
 	ldr	pc,[sp],#4		@ pop and return
 .size	_armv4_AES_encrypt,.-_armv4_AES_encrypt
-
 .global private_AES_set_encrypt_key
 .type   private_AES_set_encrypt_key,%function
 .align	5

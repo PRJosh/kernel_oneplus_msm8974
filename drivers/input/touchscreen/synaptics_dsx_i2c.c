@@ -53,9 +53,7 @@
 #endif
 
 #define NO_0D_WHILE_2D
-/*
 #define REPORT_2D_Z
-*/
 #define REPORT_2D_W
 
 /*
@@ -2549,6 +2547,9 @@ static int synaptics_rmi4_f12_abs_report(struct synaptics_rmi4_data *rmi4_data,
 	int wx;
 	int wy;
 	int temp;
+#ifdef REPORT_2D_Z
+	int z;
+#endif
 	struct synaptics_rmi4_f12_extra_data *extra_data;
 	struct synaptics_rmi4_f12_finger_data *data;
 	struct synaptics_rmi4_f12_finger_data *finger_data;
@@ -2651,6 +2652,10 @@ static int synaptics_rmi4_f12_abs_report(struct synaptics_rmi4_data *rmi4_data,
 		if (finger_status) {
 			x = (finger_data->x_msb << 8) | (finger_data->x_lsb);
 			y = (finger_data->y_msb << 8) | (finger_data->y_lsb);
+#ifdef REPORT_2D_Z
+			// The presssure from the sensor is weak, *4
+			z = finger_data->z << 2;
+#endif
 #ifdef REPORT_2D_W
 			wx = finger_data->wx;
 			wy = finger_data->wy;
@@ -2695,6 +2700,11 @@ static int synaptics_rmi4_f12_abs_report(struct synaptics_rmi4_data *rmi4_data,
 					ABS_MT_POSITION_X, x);
 			input_report_abs(rmi4_data->input_dev,
 					ABS_MT_POSITION_Y, y);
+#ifdef REPORT_2D_Z
+			input_report_abs(rmi4_data->input_dev,
+					ABS_MT_PRESSURE, z);
+#endif
+
 #ifdef REPORT_2D_W
 			input_report_abs(rmi4_data->input_dev,
 					ABS_MT_TOUCH_MAJOR, max(wx, wy));
@@ -2904,7 +2914,7 @@ static void synaptics_rmi4_report_touch(struct synaptics_rmi4_data *rmi4_data,
  * and calls synaptics_rmi4_report_touch() with the appropriate
  * function handler for each function with valid data inputs.
  */
-static void synaptics_rmi4_sensor_report(struct synaptics_rmi4_data *rmi4_data)
+static void synaptics_rmi4_sensor_report(struct synaptics_rmi4_data *rmi4_data, const ktime_t timestamp)
 {
 	int retval;
 	unsigned char data[MAX_INTR_REGISTERS + 1];
@@ -2913,7 +2923,6 @@ static void synaptics_rmi4_sensor_report(struct synaptics_rmi4_data *rmi4_data)
 	struct synaptics_rmi4_fn *fhandler;
 	struct synaptics_rmi4_exp_fn *exp_fhandler;
 	struct synaptics_rmi4_device_info *rmi;
-	ktime_t timestamp = ktime_get();
 
 	rmi = &(rmi4_data->rmi4_mod_info);
 
@@ -2977,16 +2986,6 @@ static void synaptics_rmi4_sensor_report(struct synaptics_rmi4_data *rmi4_data)
 	return;
 }
 
-//irq work function
-static void synaptics_rmi4_report_work(struct work_struct *work) {
-	struct synaptics_rmi4_data *rmi4_data = syna_rmi4_data;
-
-	if (!rmi4_data->touch_stopped)
-		synaptics_rmi4_sensor_report(rmi4_data);
-
-	enable_irq(rmi4_data->i2c_client->irq);
-}
-
 /**
  * synaptics_rmi4_irq()
  *
@@ -3000,11 +2999,10 @@ static void synaptics_rmi4_report_work(struct work_struct *work) {
 static irqreturn_t synaptics_rmi4_irq(int irq, void *data)
 {
 	struct synaptics_rmi4_data *rmi4_data = data;
+	ktime_t timestamp = ktime_get();
 
-	disable_irq_nosync(rmi4_data->i2c_client->irq);
-
-	//use work to handle irq event
-	queue_work(rmi4_data->reportqueue, &rmi4_data->reportwork);
+	if (!rmi4_data->touch_stopped)
+		synaptics_rmi4_sensor_report(rmi4_data, timestamp);
 
 	return IRQ_HANDLED;
 }
@@ -3949,6 +3947,11 @@ static void synaptics_rmi4_set_params(struct synaptics_rmi4_data *rmi4_data)
 			ABS_MT_POSITION_Y, rmi4_data->snap_top,
 			rmi4_data->sensor_max_y-rmi4_data->virtual_key_height -
 			rmi4_data->snap_bottom, 0, 0);
+#ifdef REPORT_2D_Z
+	input_set_abs_params(rmi4_data->input_dev,
+			ABS_MT_PRESSURE, 0, 255, 0, 0);
+#endif
+
 #ifdef REPORT_2D_W
 	input_set_abs_params(rmi4_data->input_dev,
 			ABS_MT_TOUCH_MAJOR, 0,
@@ -4553,10 +4556,6 @@ static int __devinit synaptics_rmi4_probe(struct i2c_client *client,
 	synaptics_ts_init_virtual_key(rmi4_data);
 	synaptics_rmi4_init_touchpanel_proc();
 
-	//add work queue init
-	rmi4_data->reportqueue = create_singlethread_workqueue("synaptics_wq");
-	INIT_WORK(&rmi4_data->reportwork, synaptics_rmi4_report_work);
-
 	retval = synaptics_rmi4_irq_enable(rmi4_data, true);
 	if (retval < 0) {
 		dev_err(&client->dev,
@@ -4608,7 +4607,6 @@ err_sysfs:
 	cancel_delayed_work_sync(&exp_data.work);
 	flush_workqueue(exp_data.workqueue);
 	destroy_workqueue(exp_data.workqueue);
-	destroy_workqueue(rmi4_data->reportqueue);
 
 	synaptics_rmi4_irq_enable(rmi4_data, false);
 
